@@ -1,0 +1,139 @@
+flowchart TB
+    %% ============================================================
+    %% TIER 0 + 1a + 1b — Scenario 1: AMR Congestion Architecture
+    %% ============================================================
+
+    subgraph EXTERNAL["External Systems (Customer Environment)"]
+        direction TB
+
+        subgraph WMS["🏪 WMS — ShipHero (Tier 0)"]
+            WMS_API["REST API\n/waves\n/wave-items\n/locations\n/inventory"]
+            WMS_WEBHOOK["Webhooks\nwave.created\nwave.updated\npick.completed"]
+            WMS_DB[("WMS Database")]
+        end
+
+        subgraph ROBOTS["🤖 Robot Fleet — Locus (Tier 1a)"]
+            ROBOT_API["REST API\n/robots (poses, status)\n/events (obstacle_detected)"]
+            ROBOT_WEBHOOK["Webhooks\nrobot.status_changed\nobstacle_detected"]
+            FLEET_MGR["Fleet Manager UI"]
+        end
+
+        subgraph LABOR["👷 Labor System (Tier 1b)"]
+            LABOR_API["REST API\n/workers (location, certs, status)\n/tasks (dispatch, complete)"]
+            LABOR_WEBHOOK["Webhooks\ntask.assigned\ntask.completed"]
+            MOBILE_APP["Worker Mobile App\n(Forklift FL-3, Count Team)"]
+        end
+
+        subgraph NOTIFICATIONS["📢 Notification Channels"]
+            SLACK["Slack / Teams\n#ops-alerts"]
+            SMS["SMS / Push"]
+        end
+    end
+
+    subgraph SUPERVISOR["🧠 AI Operational Supervisor (Your Software)"]
+        direction TB
+
+        %% Adapters
+        subgraph ADAPTERS["🔌 Adapter Layer"]
+            WMS_ADAPTER["WMS Adapter\n• Poll /waves (30s)\n• Webhook receiver\n• Normalize → CanonicalWave"]
+            ROBOT_ADAPTER["Robot Adapter\n• Poll /robots (15s)\n• Webhook: obstacle_detected\n• Normalize → CanonicalRobot"]
+            LABOR_ADAPTER["Labor Adapter\n• Poll /workers (30s)\n• Webhook: task events\n• Normalize → CanonicalWorker"]
+        end
+
+        %% Core State
+        subgraph CORE["🏗️ Core Facility State"]
+            FACILITY_STATE[("FacilityState\n• CanonicalWaves\n• CanonicalRobots\n• CanonicalWorkers\n• CanonicalLocations\n• ZoneGraph ref")]
+            ZONE_GRAPH[("ZoneGraph\n• Nodes: aisles, zones, sorters\n• Edges: routes, widths, certs\n• Alt paths: Aisle 3 (2m wider)")]
+            DRIFT_DETECTOR["Drift Detector\n• Cycle count vs WMS\n• Trend analysis\n(Scenario 2)"]
+        end
+
+        %% Intelligence
+        subgraph INTEL["🧠 Intelligence Layer"]
+            EXCEPTION_ENGINE["Exception Engine\n• Correlation rules\n• Multi-source pattern match\n• '5 robots + obstacle + wave cutoff'"]
+            LLM_REASONING["LLM Reasoning\n• Structured prompt + context\n• JSON schema output\n• Confidence score (72%)\n• Alternatives ranked"]
+            ACTION_PLANNER["Action Planner\n• Dispatch forklift\n• Reroute robots\n• Escalate to human"]
+        end
+
+        %% Human Interface
+        subgraph HUMAN_IF["👤 Human-in-the-Loop"]
+            NOTIF_DISPATCHER["Notification Dispatcher\n• Slack webhook + blocks\n• SMS gateway\n• Deep link generator"]
+            GROUND_TRUTH["Ground Truth Capture\n• Mobile web PWA\n• Offline-capable\n• Structured response schema"]
+            EVIDENCE_PANEL["Evidence Panel\n• Raw events + reasoning trace\n• 'Why this recommendation'"]
+        end
+
+        %% Learning
+        subgraph LEARNING["📈 Learning Loop"]
+            EVENT_LOG[("Append-Only Event Log\n• Exception + evidence\n• Recommendation + confidence\n• Human action + outcome\n• Ground truth label")]
+            MODEL_TUNING["Facility Model Tuning\n• Aisle 4 obstacle → pallet +5%\n• Confidence calibration\n• Per-facility specialization"]
+        end
+    end
+
+    %% ============================================================
+    %% DATA FLOWS — Scenario 1: AMR Congestion
+    %% ============================================================
+
+    %% Ingestion
+    WMS_API -->|poll 30s| WMS_ADAPTER
+    WMS_WEBHOOK -->|real-time| WMS_ADAPTER
+    ROBOT_API -->|poll 15s| ROBOT_ADAPTER
+    ROBOT_WEBHOOK -->|obstacle_detected| ROBOT_ADAPTER
+    LABOR_API -->|poll 30s| LABOR_ADAPTER
+    LABOR_WEBHOOK -->|task events| LABOR_ADAPTER
+
+    %% Normalization → FacilityState
+    WMS_ADAPTER -->|"CanonicalWave<br/>(cutoff, priority, picks)"| FACILITY_STATE
+    ROBOT_ADAPTER -->|"CanonicalRobot<br/>(pose, status, zone)"| FACILITY_STATE
+    LABOR_ADAPTER -->|"CanonicalWorker<br/>(location, certs, idle)"| FACILITY_STATE
+
+    %% ZoneGraph built once per facility
+    ZONE_GRAPH -->|spatial context| FACILITY_STATE
+
+    %% Exception Detection
+    FACILITY_STATE -->|state snapshot| EXCEPTION_ENGINE
+    EXCEPTION_ENGINE -->|"pattern matched:<br/>5 robots blocked +<br/>wave cutoff 18min"| LLM_REASONING
+
+    %% LLM Reasoning with full context
+    FACILITY_STATE -->|"wave W-14, aisle 4,<br/>forklift FL-3 50m away"| LLM_REASONING
+    ZONE_GRAPH -->|"alt route: aisle 3<br/>+8 min, needs human"| LLM_REASONING
+
+    %% Output: structured recommendation
+    LLM_REASONING -->|"JSON: action=dispatch_forklift<br/>confidence=0.72<br/>alternatives=[...]"| ACTION_PLANNER
+    ACTION_PLANNER -->|action plan| NOTIF_DISPATCHER
+
+    %% Human Notification (Slack + SMS + Deep Links)
+    NOTIF_DISPATCHER -->|"Actionable Slack msg<br/>[VIEW EVIDENCE] [DISPATCH]"| SLACK
+    NOTIF_DISPATCHER -->|SMS to floor lead| SMS
+
+    %% Human Action → Ground Truth
+    SLACK -->|"Floor lead taps<br/>[DISPATCH FL-3]"| GROUND_TRUTH
+    GROUND_TRUTH -->|"Deep link → mobile web<br/>FL-3 operator: [PALLET CLEARED]"| MOBILE_APP
+    MOBILE_APP -->|"groundTruth:<br/>finding=pallet, conf=0.95"| EVENT_LOG
+
+    %% Evidence Panel (parallel to notification)
+    LLM_REASONING -->|reasoning trace| EVIDENCE_PANEL
+    EXCEPTION_ENGINE -->|correlation evidence| EVIDENCE_PANEL
+    EVIDENCE_PANEL -->|"[VIEW EVIDENCE] link"| SLACK
+
+    %% Learning Loop
+    EVENT_LOG -->|training examples| MODEL_TUNING
+    MODEL_TUNING -->|updated priors| LLM_REASONING
+    MODEL_TUNING -->|"facility-specific<br/>confidence boost"| EXCEPTION_ENGINE
+
+    %% ============================================================
+    %% STYLING
+    %% ============================================================
+    classDef external fill:#f5f5f5,stroke:#999,stroke-width:1px;
+    classDef adapter fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    classDef core fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
+    classDef intel fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
+    classDef human fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
+    classDef learning fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+    classDef db fill:#eeeeee,stroke:#666,stroke-dasharray: 5 5;
+
+    class WMS,ROBOTS,LABOR,NOTIFICATIONS external;
+    class WMS_ADAPTER,ROBOT_ADAPTER,LABOR_ADAPTER adapter;
+    class FACILITY_STATE,ZONE_GRAPH,DRIFT_DETECTOR core;
+    class EXCEPTION_ENGINE,LLM_REASONING,ACTION_PLANNER intel;
+    class NOTIF_DISPATCHER,GROUND_TRUTH,EVIDENCE_PANEL human;
+    class EVENT_LOG,MODEL_TUNING learning;
+    class WMS_DB,FACILITY_STATE,ZONE_GRAPH,EVENT_LOG db;
